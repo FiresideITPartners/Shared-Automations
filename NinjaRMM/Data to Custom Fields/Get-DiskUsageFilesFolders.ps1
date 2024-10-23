@@ -202,7 +202,7 @@ $largestfolders = $deepestChildFolders | Sort-Object -Property Allocated -Descen
 $largestfolders | ForEach-Object {
     $folderObject = New-Object PSObject -Property @{
         Folder = $_."File Name"
-        SizeMB = $_.SizeMB
+        SizeMB = [math]::Round($_.SizeMB, 2)
     }
     $folderObjects += $folderObject
 }
@@ -223,7 +223,7 @@ $largestfiles = $filesizes | Sort-Object -Property Allocated -Descending | Selec
 $largestfiles | ForEach-Object {
     $fileObject = New-Object PSObject -Property @{
         File = $_."File Name"
-        SizeMB = $_.SizeMB
+        SizeMB = [math]::Round($_.SizeMB, 2)
     }
     $fileObjects += $fileObject
 }
