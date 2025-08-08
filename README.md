@@ -1,4 +1,5 @@
 # Shared Automations
+
 A collection of scripts and automations to share with the community.  
 
 Each platform will have its own folder, and within that folder and categorized from there.
