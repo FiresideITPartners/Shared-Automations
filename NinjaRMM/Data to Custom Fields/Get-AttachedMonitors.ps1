@@ -6,9 +6,14 @@
 #   It parses the output, formats it as an HTML table, and sends it to NinjaRMM using a custom property set command.
 #   Temporary files are cleaned up after execution.
 #
+# 
+#
 # .NOTES
 #   Author: Fireside IT Partners
-#   Requirements: PowerShell 5.0+, Internet access, permission to download and run external utilities
+#   Requirements: 
+#       - PowerShell 5.0+
+#       - Internet access
+#       - NinjaRMM WYSIWYG custom field (change variable below)
 #   External Tool: https://www.nirsoft.net/utils/monitorinfoview.html
 #
 # .EXAMPLE
@@ -77,52 +82,87 @@ function ConvertTo-ObjectToHtmlTable {
     return $sb.ToString()
 }
 
+
 # Download MonitorInfoView.exe if it doesn't exist
 if (Test-Path $monitorinfoviewPath) {
-    Write-Output "File already exists: $monitorinfoviewPath"
-    return
-}
-try {
-    Invoke-WebRequest -Uri $monitorinfoviewURL -OutFile $monitorinfoviewDLPath -ErrorAction Stop
-    Expand-Archive -Path $monitorinfoviewDLPath -DestinationPath $tempfolder -Force
-    Write-Output "Download successful: $monitorinfoviewPath"
-}
-catch {
-    Write-Error "Failed to download file from $monitorinfoviewURL to $monitorinfoviewPath. Error: $_"
-    exit 1
-}
-
-#Run MonitorInfoView.exe
-$outCSV = Join-Path $tempfolder "monitorinfo.csv"
-Try {
-    Start-Process -FilePath $monitorinfoviewPath -ArgumentList "/scomma $outCSV" -Wait
-}
-Catch {
-    Write-Error "Failed to run MonitorInfoView.exe. Error: $_"
-    exit 1
-}
-#verify CSV created
-if (!(Test-Path $outCSV)) {
-    Write-Error "MonitorInfoView.exe did not create the expected XML file: $outCSV"
-    exit 1
-}
-
-# Import the CSV
-$monitors = Import-CSV $outCSV
-# Create custom objects with selected and renamed fields
-$customMonitors = $monitors | ForEach-Object {
-    [PSCustomObject]@{
-        Name        = $_.'Monitor Name'
-        Serial      = $_.'Serial Number'
-        Resolution  = $_.'Maximum Resolution'
-        Size        = if (![string]::IsNullOrWhiteSpace($_.'Image Size')) { $_.'Image Size' } else { $_.'Maximum Image Size' }
-        LastChecked = $_.'Last Update Time'
+    Write-Host "File already exists: $monitorinfoviewPath"
+} else {
+    try {
+        Write-Host "Downloading MonitorInfoView from $monitorinfoviewURL ..."
+        Invoke-WebRequest -Uri $monitorinfoviewURL -OutFile $monitorinfoviewDLPath -ErrorAction Stop
+        Write-Host "Extracting MonitorInfoView..."
+        Expand-Archive -Path $monitorinfoviewDLPath -DestinationPath $tempfolder -Force
+        Write-Host "Download and extraction successful: $monitorinfoviewPath"
+    } catch {
+        Write-Host "ERROR: Failed to download or extract MonitorInfoView from $monitorinfoviewURL to $monitorinfoviewPath. Error: $_" -ForegroundColor Red
+        Remove-Item -Path $tempFolder -Recurse -Force -ErrorAction SilentlyContinue
+        exit 1
     }
 }
 
+
+$outXML = Join-Path $tempFolder "monitorinfo.xml"
+try {
+    Write-Host "Running MonitorInfoView to collect monitor information..."
+    Start-Process -FilePath $monitorinfoviewPath -ArgumentList "/sxml $outXML" -Wait
+} catch {
+    Write-Host "ERROR: Failed to run MonitorInfoView.exe. Error: $_" -ForegroundColor Red
+    Remove-Item -Path $tempFolder -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+
+if (!(Test-Path $outXML)) {
+    Write-Host "ERROR: MonitorInfoView.exe did not create the expected XML file: $outXML" -ForegroundColor Red
+    Remove-Item -Path $tempFolder -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+
+try {
+    [xml]$monitorsxml = Get-Content $outXML
+    $monitors = $monitorsxml.monitors_list.item
+} catch {
+    Write-Host "ERROR: Failed to parse XML output: $outXML. Error: $_" -ForegroundColor Red
+    Remove-Item -Path $tempFolder -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+
+if (-not $monitors) {
+    Write-Host "ERROR: No monitor information found in XML output." -ForegroundColor Yellow
+    Remove-Item -Path $tempFolder -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+
+$customMonitors = @()
+foreach ($monitor in $monitors) {
+    $customMonitors += [PSCustomObject]@{
+        Name        = $monitor.'monitor_name'
+        Serial      = $monitor.'serial_number'
+        Resolution  = $monitor.'maximum_resolution'
+        Size        = if (![string]::IsNullOrWhiteSpace($monitor.'image_size')) { $monitor.'image_size' } else { $monitor.'maximum_image_size' }
+        Active     = $monitor.'active'
+        LastUpdated = $monitor.'last_update_time'
+    }
+}
+
+if ($customMonitors.Count -eq 0) {
+    Write-Host "WARNING: No monitor data was collected." -ForegroundColor Yellow
+    Remove-Item -Path $tempFolder -Recurse -Force -ErrorAction SilentlyContinue
+    exit 0
+}
+
+Write-Host "Monitor information collected successfully."
 #create HTML table for custom fields
-$htmlTable = ConvertTo-ObjectToHtmlTable -Objects $customMonitors
-$htmlTable | Ninja-Property-Set-Piped $ninjacustomfield
+try {
+    $htmlTable = ConvertTo-ObjectToHtmlTable -Objects $customMonitors
+    $htmlTable | Ninja-Property-Set-Piped $ninjacustomfield
+    Write-Host "Monitor information sent to NinjaRMM custom field '$ninjacustomfield'."
+} catch {
+    Write-Host "ERROR: Failed to convert monitor data to HTML or send to NinjaRMM. Error: $_" -ForegroundColor Red
+    Remove-Item -Path $tempFolder -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+}
 
 #cleanup temp folder
-Remove-Item -Path $tempFolder -Recurse -Force
+Remove-Item -Path $tempFolder -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "Temporary files cleaned up."
+exit 0
