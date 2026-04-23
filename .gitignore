@@ -1,0 +1,4 @@
+*.conf
+*.lnk
+NinjaRMM/Utility/*v2.ps1
+NinjaRMM/Utility/*.html
